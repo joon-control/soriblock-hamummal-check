@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "profile_id": "sample-team",
+  "python_executable": "",
+  "cohort": "예시기수",
+  "group": "예시조",
+  "mission": "하멈말",
+  "window_start": "13:30:00",
+  "final_time": "14:02:00",
+  "whole_minute_checkpoints": [
+    "13:50"
+  ],
+  "expected_member_count": 2,
+  "source_verified": false,
+  "mapping_verified": false,
+  "kakao": {
+    "room_id": "10000000000000001",
+    "room_title": "예시 소통방",
+    "user_dir": "C:/KakaoExample/users/example"
+  },
+  "slack": {
+    "workspace_id": "TEXAMPLE",
+    "channel_id": "CEXAMPLE",
+    "token_env": "HAMUMMAL_SLACK_TOKEN"
+  },
+  "site": {
+    "base_url": "https://boot.soritune.com"
+  },
+  "members": [
+    {
+      "real_name": "가상참가자A",
+      "site_name": "가상참가자A_별명A",
+      "group_room": "가상참가자A_별명A(1회)",
+      "communication_room": "소통방별명A",
+      "author_id": "1000000000000000001",
+      "absent_confirmed": false
+    },
+    {
+      "real_name": "가상참가자B",
+      "site_name": "가상참가자B_별명B",
+      "group_room": "가상참가자B_별명B(2회)",
+      "communication_room": null,
+      "author_id": null,
+      "absent_confirmed": true
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+config.local.json
+data/
+*.dpapi*
+.env
+.env.*
+__pycache__/
+*.pyc

@@ -1,0 +1,4 @@
+interface:
+  display_name: "하멈말 체크"
+  short_description: "새 조의 명단과 소통방을 설정하고 제출 점검·슬랙 보고·시스템 체크를 실행합니다"
+  default_prompt: "$hamummal-check 스킬로 새 기수와 조의 하멈말 점검을 설정하고 미리보기부터 검증해줘."
