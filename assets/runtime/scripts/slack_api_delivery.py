@@ -80,7 +80,7 @@ def message_permalink(channel: str, ts: str, token: str, workspace_url: str) -> 
         return f"https://{parsed.netloc}/archives/{channel}/p{ts.replace('.', '')}"
 
 
-def validated_report(as_of: str, day: dt.date) -> dict:
+def validated_report(as_of: str, day: dt.date, *, reporter=None) -> dict:
     from check_communication_room import report
 
     label_time = dt.datetime.fromisoformat(f"{day.isoformat()}T{as_of}").replace(tzinfo=KST)
@@ -90,7 +90,7 @@ def validated_report(as_of: str, day: dt.date) -> dict:
               else label_time)
     if dt.datetime.now(KST) < cutoff:
         raise RuntimeError("점검 시각이 아직 되지 않았거나 범위를 벗어남")
-    result = report(cutoff, label_time=label_time)
+    result = (reporter or report)(cutoff, label_time=label_time)
     if result["room"] != CONFIG["kakao"]["room_title"]:
         raise RuntimeError("카카오톡 소통방 출처 불일치")
     completed, missing = result["completed"], result["missing"]
@@ -116,7 +116,8 @@ def validated_report(as_of: str, day: dt.date) -> dict:
     return result
 
 
-def _main() -> None:
+def _main(argv=None, *, report_loader=None, token=None) -> None:
+    report_loader = report_loader or validated_report
     parser = argparse.ArgumentParser()
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--connection", action="store_true")
@@ -127,7 +128,7 @@ def _main() -> None:
     parser.add_argument("--date", default=dt.datetime.now(KST).date().isoformat())
     parser.add_argument("--resend-id")
     parser.add_argument("--thread-ts")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.thread_ts and not re.fullmatch(r"\d+\.\d+", args.thread_ts):
         parser.error("--thread-ts must be a Slack message timestamp")
 
@@ -151,12 +152,12 @@ def _main() -> None:
             time.sleep(seconds_to_wait)
 
     if args.preview:
-        result = validated_report(args.as_of, day)
+        result = report_loader(args.as_of, day)
         print(json.dumps({"completed": result["completed"], "missing": result["missing"],
                           "slack_message": result["slack_message"]}, ensure_ascii=False, indent=2))
         return
 
-    token = os.environ.get("SLACK_BOT_TOKEN", "")
+    token = token if token is not None else os.environ.get("SLACK_BOT_TOKEN", "")
     if not token.startswith("xoxb-"):
         raise RuntimeError("Slack 봇 토큰이 설정되지 않았거나 xoxb- 형식이 아님")
     identity = api("auth.test", {}, token)
@@ -176,7 +177,7 @@ def _main() -> None:
         if receipt.get("state") == "sent" and args.send:
             # Reuse the exact roster that was actually posted. Re-reading a
             # mutable DB must not silently change the site checks on a retry.
-            result = receipt.get("snapshot") or validated_report(args.as_of, day)
+            result = receipt.get("snapshot") or report_loader(args.as_of, day)
             workspace_url = identity.get("url", "")
             current_host = urllib.parse.urlsplit(workspace_url).hostname
             saved_host = urllib.parse.urlsplit(receipt.get("permalink", "")).hostname
@@ -196,7 +197,7 @@ def _main() -> None:
         raise RuntimeError(f"중복 전송 방지: {key} 상태={receipt.get('state')} "
                            f"링크={receipt.get('permalink', '없음')}")
     if args.send:
-        result = validated_report(args.as_of, day)
+        result = report_loader(args.as_of, day)
         message = result["slack_message"]
     else:
         message = f"[테스트] {TITLE} 체크 · Slack API 전송 확인\n자동 전송 연결을 확인하는 메시지입니다."
@@ -236,13 +237,14 @@ def _main() -> None:
     print(json.dumps(summary, ensure_ascii=False))
 
 
-def main() -> None:
-    if "--preview" in sys.argv or "--connection" in sys.argv:
-        _main()
+def main(argv=None, *, report_loader=None, token=None) -> None:
+    options = argv if argv is not None else sys.argv[1:]
+    if "--preview" in options or "--connection" in options:
+        _main(argv, report_loader=report_loader, token=token)
     else:
         # Manual Slack commands and scheduled checks share one receipt file.
         with process_lock(RECEIPTS.with_suffix(".lock")):
-            _main()
+            _main(argv, report_loader=report_loader, token=token)
 
 
 if __name__ == "__main__":

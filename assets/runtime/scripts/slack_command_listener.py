@@ -24,12 +24,13 @@ import urllib.request
 
 from local_state import process_lock, write_json
 from slack_api_delivery import CHANNEL, KST, WORKSPACE
+from quick_check import QuickChecker, LocalQuickRequests
 
 
 ROOT = Path(__file__).resolve().parent.parent
 from runtime_config import CONFIG, START_TIME, FINAL_TIME, FINAL_LABEL, STATE_DIR as PROFILE_STATE
 STATE_DIR = PROFILE_STATE / "slack_listener"
-COMMANDS = {"시작", "지금체크해줘", "체크해줘"}
+COMMANDS = {"시작", "지금체크해줘", "체크해줘", "체크", "check"}
 MAX_AGE_SECONDS = 600
 
 
@@ -98,18 +99,22 @@ class SlackClient:
         raise SlackError("history_backlog_too_large")
 
 
+def command_text(message: dict, bot_user_id: str) -> str:
+    text = str(message.get("text", "")).strip()
+    mention = f"<@{bot_user_id}>"
+    if text.startswith(mention):
+        text = text[len(mention):].strip()
+    text = re.sub(r"[.!?。！？]+$", "", text)
+    return re.sub(r"\s+", "", text).casefold()
+
+
 def is_command(message: dict, bot_user_id: str) -> bool:
     if (not message.get("user") or message.get("bot_id") or message.get("subtype")
             or message.get("user") == bot_user_id
             or message.get("team", WORKSPACE) != WORKSPACE
             or message.get("thread_ts", message.get("ts")) != message.get("ts")):
         return False
-    text = str(message.get("text", "")).strip()
-    mention = f"<@{bot_user_id}>"
-    if text.startswith(mention):
-        text = text[len(mention):].strip()
-    text = re.sub(r"[.!?。！？]+$", "", text)
-    return re.sub(r"\s+", "", text) in COMMANDS
+    return command_text(message, bot_user_id) in COMMANDS
 
 
 def safe_job_error(output: str) -> str:
@@ -161,12 +166,13 @@ def run_job(mode: str, day: str, as_of: str, thread_ts: str, powershell: str) ->
 
 class Listener:
     def __init__(self, client: SlackClient, directory: Path, powershell: str,
-                 *, runner=run_job, now=None):
+                 *, runner=None, now=None, checker=None):
         self.client = client
         self.directory = directory
         self.state_file = directory / "state.json"
         self.powershell = powershell
-        self.runner = runner
+        self.checker = checker or QuickChecker()
+        self.runner = runner or self.run_job
         self.now = now or (lambda: dt.datetime.now(KST))
         if self.state_file.exists():
             self.state = json.loads(self.state_file.read_text(encoding="utf-8"))
@@ -178,6 +184,12 @@ class Listener:
             self.save()
         self.bot_user_id = ""
         self.recovered = False
+
+    def run_job(self, mode, day, as_of, thread_ts, powershell):
+        if mode == "quick":
+            requested = dt.datetime.fromtimestamp(float(thread_ts), KST)
+            return self.checker.run(requested, token=load_token(), thread_ts=thread_ts)
+        return run_job(mode, day, as_of, thread_ts, powershell)
 
     def save(self):
         commands = self.state["commands"]
@@ -229,7 +241,8 @@ class Listener:
                 text = f"오늘 점검은 한국 시간 {START_TIME:%H:%M:%S} 이후 요청할 수 있습니다."
                 mode = None
             else:
-                mode = "final" if now.time() >= FINAL_TIME else "current"
+                mode = ("quick" if command_text(message, self.bot_user_id) in {"체크", "check"}
+                        else "final" if now.time() >= FINAL_TIME else "current")
                 text = "하멈말 최종 점검을 시작합니다. Slack 게시 후 시스템 저장·재조회까지 확인합니다." if mode == "final" else "소통방 제출을 확인하고 있습니다. 결과를 이 스레드에 보내겠습니다."
             ack = self.client.request("chat.postMessage", {"channel": CHANNEL, "thread_ts": ts,
                     "text": text, "mrkdwn": False, "unfurl_links": False, "unfurl_media": False})
@@ -248,7 +261,14 @@ class Listener:
             slack = result["slack"] if mode == "final" else result
             if not (slack.get("sent") or slack.get("already_sent")) or not slack.get("permalink"):
                 raise RuntimeError("Slack 게시 성공을 확인하지 못했습니다.")
+            as_of = slack.get("as_of", as_of)
             summary = f"{now:%Y-%m-%d} {as_of} 기준 확인 완료: 완료 {slack['completed_count']}명, 미완료 {slack['missing_count']}명."
+            if mode == "quick":
+                duration = (self.now() - requested).total_seconds()
+                summary += f" 요청부터 결과 확인까지 {duration:.2f}초."
+                lag = float(slack.get("source_lag_seconds", 0))
+                if lag >= 1:
+                    summary += f" PC 자료는 요청보다 {lag:.0f}초 앞선 시각 기준입니다."
             if mode == "final":
                 site = result["site"]
                 if not site.get("verified_after_save"):
@@ -305,13 +325,23 @@ def main():
                         handlers=[RotatingFileHandler(args.state_dir / "listener.log", maxBytes=1_000_000,
                                                       backupCount=3, encoding="utf-8")])
     with process_lock(args.state_dir / "listener.lock", timeout=0):
-        listener = Listener(client, args.state_dir, powershell)
+        checker = QuickChecker()
+        write_json(args.state_dir / "status.json", {"state": "warming_key", "pid": os.getpid(),
+                   "checked_at": dt.datetime.now(KST).isoformat()})
+        try:
+            checker.key()
+        except (RuntimeError, OSError, ValueError) as exc:
+            logging.warning("key_warmup_unavailable reason=%s", str(exc))
+        listener = Listener(client, args.state_dir, powershell, checker=checker)
+        local_requests = LocalQuickRequests(args.state_dir / "quick_requests", checker, load_token)
         last_error = None
         while True:
             delay = max(5, float(config.get("poll_seconds", 5)))
             try:
+                local_requests.poll()
                 listener.poll()
-                status = {"state": "listening", "channel": CHANNEL}
+                status = {"state": "listening", "channel": CHANNEL,
+                          "key_ready": checker._key is not None}
                 last_error = None
             except (RuntimeError, OSError, ValueError, KeyError) as exc:
                 code = str(exc)

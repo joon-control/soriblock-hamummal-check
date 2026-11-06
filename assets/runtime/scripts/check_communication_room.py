@@ -38,9 +38,14 @@ def recover_key() -> bytes:
     raise RuntimeError("소통방 DB 복호화 키를 KakaoTalk 프로세스에서 찾지 못함")
 
 
-def report(cutoff: dt.datetime, *, label_time: dt.datetime | None = None) -> dict:
+def report(cutoff: dt.datetime, *, label_time: dt.datetime | None = None,
+           window_end: dt.datetime | None = None, key_provider=None) -> dict:
     start = dt.datetime.combine(cutoff.date(), START_TIME, KST)
     end = dt.datetime.combine(cutoff.date(), FINAL_TIME, KST) - dt.timedelta(seconds=1)
+    if window_end is not None:
+        if window_end.date() != cutoff.date() or window_end < start:
+            raise RuntimeError("별도 집계 종료 시각을 확인해주세요.")
+        end = window_end
     if cutoff < start or cutoff > end + dt.timedelta(seconds=1):
         raise RuntimeError("점검 시각은 설정한 제출 시간 범위여야 함")
     if not SOURCE.exists():
@@ -53,7 +58,8 @@ def report(cutoff: dt.datetime, *, label_time: dt.datetime | None = None) -> dic
     valid_ids = [uid for uid in COMMUNICATION_AUTHORS.values() if uid is not None]
     if len(valid_ids) != len(set(valid_ids)) or len(valid_ids) != sum(m["author_id"] is not None for m in MEMBERS):
         raise RuntimeError("소통방 작성자 ID 중복 또는 인원 불일치")
-    plain = bytearray(plaintext_snapshot(SOURCE, recover_key()))
+    key = key_provider() if key_provider is not None else recover_key()
+    plain = bytearray(plaintext_snapshot(SOURCE, key))
     plain[18:20] = b"\x01\x01"
     connection = sqlite3.connect(":memory:")
     connection.deserialize(bytes(plain))

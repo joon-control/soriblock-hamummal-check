@@ -7,6 +7,12 @@ description: Set up and run Soritune 하멈말 voice-submission checks for a new
 
 새 기수·조마다 독립 프로젝트를 만들고 카카오톡 소통방의 음성 제출을 판정해 Slack 보고와 조장 체크리스트 반영을 수행한다. 실행 코드와 가상 설정 예시가 포함되어 있다.
 
+## 빠른 점검 명령
+
+이미 설정된 조별 프로젝트에서 `체크` 또는 `check`를 요청하면 첫 실행 도구에서 `scripts/run_check_now.ps1`을 호출한다. 별도의 시계 조회, 코드 탐색, 집계 방식 선택을 먼저 수행하지 않는다. 현재 날짜·자료 기준 시각 선택과 이름·음성 검증은 코드가 처리한다. 오류가 있을 때 진단한다.
+
+이 경로는 상주 수신기의 RAM 키를 검증해 재사용하고 현재 현황을 Slack에 보낸다. 결과의 실제 as_of와 source_lag_seconds를 표시한다. PC 기록이 요청 시각보다 오래되었으면 그 시각 차이를 알린다. 명시한 시각, 최종본과 시스템 체크 요청은 해당 별도 경로를 따른다. [운영 절차](references/operations.md)에 실행 조건과 시간 측정 범위가 있다.
+
 ## 새 조 설정
 
 1. 기존 설정과 실행 상태를 먼저 확인한다. 새 조는 고유 profile_id와 별도 프로젝트를 사용한다. `python scripts/create_project.py --target <새 프로젝트 경로>`로 번들 실행 코드를 복사한다.
